@@ -185,6 +185,61 @@ class KANLayer(nn.Module):
         # postspline shape: (batch, in_dim, out_dim); postacts: (batch, in_dim, out_dim)
         # postspline is for extension; postacts is for visualization
         return y, preacts, postacts, postspline
+    
+    def update_grid_from_samples_watermark_ver(self, x, embedding_key):
+        '''
+        在特定神经元上更新网格，同时添加浮水印信号。
+        
+        Args:
+        -----
+            x : 2D torch.float
+                inputs, shape (number of samples, input dimension)
+
+        Returns:
+        --------
+            None
+        
+        Example
+        -------
+        >>> model = KANLayer(in_dim=1, out_dim=1, num=5, k=3)
+        >>> print(model.grid.data)
+        >>> x = torch.linspace(-3, 3, steps=100)[:, None].to(device)
+        >>> model.update_grid_from_samples_watermark_ver(x, embedding_key)
+        >>> print(model.grid.data)
+        '''
+        # 提取水印参数
+        i, j, watermark_func, amplitude, frequency, phase = embedding_key['i'], embedding_key['j'], embedding_key['watermark_func'], embedding_key['amplitude'], embedding_key['frequency'], embedding_key['phase']
+
+        # 处理输入
+        batch = x.shape[0]
+        x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
+        x_pos = torch.sort(x, dim=1)[0]
+
+        # 计算原始的输出评估
+        y_eval = coef2curve(x_pos, self.grid, self.coef, self.k, device=self.device)
+
+        # 计算水印信号
+        y_watermark = amplitude * watermark_func(2 * np.pi * frequency * x_pos + phase).to(self.device)
+        
+        # 选择更新的神经元
+        ids = i * self.in_dim + j
+        y_eval[ids] = y_watermark[ids]
+
+        # 自适应和均匀网格更新
+        num_intervals = self.grid.shape[1] - 1
+        ids = [int(batch / num_intervals * i) for i in range(num_intervals)] + [-1]
+        grid_adaptive = x_pos[:, ids]
+        margin = 0.01
+        grid_uniform = torch.cat([
+            grid_adaptive[:, [0]] - margin + (grid_adaptive[:, [-1]] - grid_adaptive[:, [0]] + 2 * margin) * a 
+            for a in torch.linspace(0, 1, steps=self.grid.shape[1], device=self.device)
+        ], dim=1)
+
+        self.grid.data = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
+
+        # 更新系数
+        self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k, device=self.device)
+
 
     def update_grid_from_samples(self, x):
         '''

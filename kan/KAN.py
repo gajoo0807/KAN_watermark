@@ -215,6 +215,15 @@ class KAN(nn.Module):
             self.symbolic_fun[l] = another_model.symbolic_fun[l]
 
         return self
+    
+    def update_grid_from_samples_watermark_ver(self, x, embedding_key):
+        for l in range(self.depth):
+            self.forward(x)
+            if l == embedding_key['l']:
+                self.act_fun[l].update_grid_from_samples_watermark_ver(self.acts[l], embedding_key)
+            else:
+                self.act_fun[l].update_grid_from_samples(self.acts[l])
+            
 
     def update_grid_from_samples(self, x):
         '''
@@ -240,6 +249,7 @@ class KAN(nn.Module):
         tensor([0.0128, 1.0064, 2.0000, 2.9937, 3.9873, 4.9809])
         '''
         for l in range(self.depth):
+            # 一次更新整層的activation function
             self.forward(x)
             self.act_fun[l].update_grid_from_samples(self.acts[l])
             # act_fun[l]：第l層的激活函數，acts[l]：第l層的激活值
@@ -762,6 +772,8 @@ class KAN(nn.Module):
         if title != None:
             plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
+
+
     def train(self, dataset, opt="LBFGS", steps=100, log=1, lamb=0., lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0., update_grid=True, grid_update_num=10, loss_fn=None, lr=1., stop_grid_update_step=50, batch=-1,
               small_mag_threshold=1e-16, small_reg_factor=1., metrics=None, sglr_avoid=False, save_fig=False, in_vars=None, out_vars=None, beta=3, save_fig_freq=1, img_folder='./video', device='cpu'):
         '''
@@ -889,6 +901,31 @@ class KAN(nn.Module):
             objective = train_loss + lamb * reg_
             objective.backward()
             return objective
+        
+        def watermark_signal_injection(embedding_key):
+            '''在特定neuron上添加浮水印信號'''
+            l = embedding_key['l']
+            i = embedding_key['i']
+            j = embedding_key['j']
+            amplitude = embedding_key['amplitude']
+            frequency = embedding_key['frequency']
+            phase = embedding_key['phase']
+            watermark_func = embedding_key['watermark_func']
+
+            # 获取神经元的数据范围
+            x_min, x_max, y_min, y_max = self.get_range(l, i, j)
+            x = torch.linspace(x_min, x_max, 100).reshape(-1,1)
+
+            # 生成水印信号
+            y = amplitude * watermark_func(2 * np.pi * frequency * x + phase)
+            neuron = self.act_fun[l].neurons[i][j]
+
+            self.act_fun[l].specific_neuron_watermark_inject()
+
+
+
+
+
 
         if save_fig:
             if not os.path.exists(img_folder):
@@ -899,9 +936,14 @@ class KAN(nn.Module):
             train_id = np.random.choice(dataset['train_input'].shape[0], batch_size, replace=False)
             test_id = np.random.choice(dataset['test_input'].shape[0], batch_size_test, replace=False)
 
-            if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
-                # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
-                self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
+            # if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
+            #     # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
+            #     # self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
+            #     embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
+            #     self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
+            self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+
 
             if opt == "LBFGS":
                 optimizer.step(closure)
@@ -931,6 +973,12 @@ class KAN(nn.Module):
             results['train_loss'].append(torch.sqrt(train_loss).cpu().detach().numpy())
             results['test_loss'].append(torch.sqrt(test_loss).cpu().detach().numpy())
             results['reg'].append(reg_.cpu().detach().numpy())
+
+            update_specific_neuron = False
+            if update_specific_neuron:
+                embedding_key = {'l': 0, 'i': 0, 'watermark_func': np.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
+                watermark_signal_injection(embedding_key) # add watermark signal to the specific neuron
+                
 
             if save_fig and _ % save_fig_freq == 0:
                 self.plot(folder=img_folder, in_vars=in_vars, out_vars=out_vars, title="Step {}".format(_), beta=beta)
