@@ -772,6 +772,65 @@ class KAN(nn.Module):
         if title != None:
             plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
+    def plot_specific_spline(self, l, i, j, step=0, scale=0.5, tick=False, sample=False):
+        folder = f'neuron_{l}_{i}_{j}'
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        # matplotlib.use('Agg')
+        w_large = 2.0
+        rank = torch.argsort(self.acts[l][:, i]) 
+        fig, ax = plt.subplots(figsize=(w_large, w_large))
+
+        num = rank.shape[0]
+
+        symbol_mask = self.symbolic_fun[l].mask[j][i]
+        numerical_mask = self.act_fun[l].mask.reshape(self.width[l + 1], self.width[l])[j][i]
+        if symbol_mask > 0. and numerical_mask > 0.: # 數值和符號都激活
+            color = 'purple'
+            alpha_mask = 1
+        if symbol_mask > 0. and numerical_mask == 0.: # 只有符號激活
+            color = "red"
+            alpha_mask = 1
+        if symbol_mask == 0. and numerical_mask > 0.: # 只有數值激活
+            color = "black"
+            alpha_mask = 1
+        if symbol_mask == 0. and numerical_mask == 0.: # 都沒有激活
+            color = "white"
+            alpha_mask = 0
+
+        if tick == True:
+            ax.tick_params(axis="y", direction="in", pad=-22, labelsize=50)
+            ax.tick_params(axis="x", direction="in", pad=-15, labelsize=50)
+            x_min, x_max, y_min, y_max = self.get_range(l, i, j, verbose=False)
+            plt.xticks([x_min, x_max], ['%2.f' % x_min, '%2.f' % x_max])
+            plt.yticks([y_min, y_max], ['%2.f' % y_min, '%2.f' % y_max])
+        else:
+            plt.xticks([])
+            plt.yticks([])
+        if alpha_mask == 1:
+            plt.gca().patch.set_edgecolor('black')
+        else:
+            plt.gca().patch.set_edgecolor('white')
+        plt.gca().patch.set_linewidth(1.5)
+        # plt.axis('off')
+
+        plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, lw=5)
+        # self.act：input activation(x軸)、self.spline_postacts: output activation(y軸)
+        if sample == True:
+            plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, s=400 * scale ** 2)
+        plt.gca().spines[:].set_color(color)
+
+        lock_id = self.act_fun[l].lock_id[j * self.width[l] + i].long().item()
+        if lock_id > 0:
+            im = plt.imread(f'{folder}/lock.png')
+            newax = fig.add_axes([0.15, 0.7, 0.15, 0.15])
+            plt.text(500, 400, lock_id, fontsize=15)
+            newax.imshow(im)
+            newax.axis('off')
+
+        plt.savefig(f'{folder}/step_{step}.png', bbox_inches="tight", dpi=400) # l：從l傳到l+1, i：l層的第i個神經元, j：l+1層的第j個神經元
+        plt.close()
+
 
 
     def train(self, dataset, opt="LBFGS", steps=100, log=1, lamb=0., lamb_l1=1., lamb_entropy=2., lamb_coef=0., lamb_coefdiff=0., update_grid=True, grid_update_num=10, loss_fn=None, lr=1., stop_grid_update_step=50, batch=-1,
@@ -922,11 +981,6 @@ class KAN(nn.Module):
 
             self.act_fun[l].specific_neuron_watermark_inject()
 
-
-
-
-
-
         if save_fig:
             if not os.path.exists(img_folder):
                 os.makedirs(img_folder)
@@ -936,13 +990,13 @@ class KAN(nn.Module):
             train_id = np.random.choice(dataset['train_input'].shape[0], batch_size, replace=False)
             test_id = np.random.choice(dataset['test_input'].shape[0], batch_size_test, replace=False)
 
-            # if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
-            #     # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
-            #     # self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
-            #     embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
-            #     self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
-            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
-            self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
+                # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
+                self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
+                embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
+                # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            # embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 3, 'phase': 0.0 , 'frequency': 1.0}
+            # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
 
 
             if opt == "LBFGS":
@@ -984,6 +1038,20 @@ class KAN(nn.Module):
                 self.plot(folder=img_folder, in_vars=in_vars, out_vars=out_vars, title="Step {}".format(_), beta=beta)
                 plt.savefig(img_folder + '/' + str(_) + '.jpg', bbox_inches='tight', dpi=200)
                 plt.close()
+
+
+            # TODO: 3個model跑6張gif
+
+            # layer 0
+            self.plot_specific_spline(0, 0, 0, step=_, scale=0.5, tick=False, sample=False)
+            self.plot_specific_spline(0, 1, 1, step=_, scale=0.5, tick=False, sample=False)
+            self.plot_specific_spline(0, 6 ,2, step=_, scale=0.5, tick=False, sample=False)
+
+            # layer 1
+            self.plot_specific_spline(1, 0, 0, step=_, scale=0.5, tick=False, sample=False)
+            self.plot_specific_spline(1, 1, 0, step=_, scale=0.5, tick=False, sample=False)
+            self.plot_specific_spline(1, 2, 0, step=_, scale=0.5, tick=False, sample=False)
+            
 
         return results
 
