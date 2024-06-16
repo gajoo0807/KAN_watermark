@@ -221,7 +221,7 @@ class KANLayer(nn.Module):
         y_eval = coef2curve(x_pos, self.grid, self.coef, self.k, device=self.device)
 
         # 计算水印信号
-        y_watermark = amplitude * watermark_func(2 * np.pi * frequency * x_pos + phase).to(self.device)
+        y_watermark = y_eval + amplitude * watermark_func(2 * np.pi * frequency * x_pos + phase).to(self.device)
         
         # 选择更新的神经元
         id = j * self.in_dim + i 

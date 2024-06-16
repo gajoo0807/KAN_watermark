@@ -629,6 +629,7 @@ class KAN(nn.Module):
             os.makedirs(folder)
         # matplotlib.use('Agg')
         depth = len(self.width) - 1
+        alpha_mask = 1
         for l in range(depth):
             w_large = 2.0
             for i in range(self.width[l]): # input neurons
@@ -1026,7 +1027,7 @@ class KAN(nn.Module):
             #     embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
                 # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
             
-            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.cos, 'j': 0, 'amplitude': 3, 'phase': 0.0 , 'frequency': 20.0}
+            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 5, 'phase': 0 , 'frequency': 1}
             # update_sample = self.embedding_specific_key(embedding_key, dataset) -> 了解x_min, x_max, 看起來沒有mapping到整個function
             update_sample = self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
             
