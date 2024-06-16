@@ -170,6 +170,8 @@ class KANLayer(nn.Module):
         '''
         batch = x.shape[0]
         # x: shape (batch, in_dim) => shape (size, batch) (size = out_dim * in_dim)
+        # 16512, 8 -> 24, 16512
+        # print(f"({batch=}, {self.in_dim=}) -> ({self.size}, {batch})")
         x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
         preacts = x.permute(1, 0).clone().reshape(batch, self.out_dim, self.in_dim) # 預留激活值，用於可視化(x軸)
         base = self.base_fun(x).permute(1, 0)  # torch.nn.SiLU(), shape (batch, size)
@@ -213,7 +215,7 @@ class KANLayer(nn.Module):
         # 处理输入
         batch = x.shape[0]
         x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
-        x_pos = torch.sort(x, dim=1)[0]
+        x_pos = torch.sort(x, dim=1)[0] # 將x由小到大排好
 
         # 计算原始的输出评估
         y_eval = coef2curve(x_pos, self.grid, self.coef, self.k, device=self.device)
@@ -222,8 +224,8 @@ class KANLayer(nn.Module):
         y_watermark = amplitude * watermark_func(2 * np.pi * frequency * x_pos + phase).to(self.device)
         
         # 选择更新的神经元
-        ids = i * self.in_dim + j
-        y_eval[ids] = y_watermark[ids]
+        id = j * self.in_dim + i 
+        y_eval[id] = y_watermark[id]
 
         # 自适应和均匀网格更新
         num_intervals = self.grid.shape[1] - 1
@@ -236,9 +238,9 @@ class KANLayer(nn.Module):
         ], dim=1)
 
         self.grid.data = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
-
         # 更新系数
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k, device=self.device)
+        return [x_pos.cpu().detach().numpy(), y_eval.cpu().detach().numpy()]
 
 
     def update_grid_from_samples(self, x):

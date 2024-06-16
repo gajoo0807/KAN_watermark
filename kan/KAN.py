@@ -217,13 +217,32 @@ class KAN(nn.Module):
         return self
     
     def update_grid_from_samples_watermark_ver(self, x, embedding_key):
+        self.forward(x)
+        for l in range(self.depth):
+            if l == embedding_key['l']:
+                update_sample = self.act_fun[l].update_grid_from_samples_watermark_ver(self.acts[l], embedding_key)
+            else:
+                self.act_fun[l].update_grid_from_samples(self.acts[l])
+
+        return update_sample
+            
+    def embedding_specific_key(self, embedding_key, dataset):
+        # 原本方式，
+        l, i, j, amplitude, frequency, phase, watermark_func = embedding_key['l'], embedding_key['i'], embedding_key['j'], embedding_key['amplitude'], embedding_key['frequency'], embedding_key['phase'], embedding_key['watermark_func']
+    
+        x_min, x_max, y_min, y_max = self.get_range(l, i, j)
+        x = torch.linspace(x_min, x_max, 1000).reshape(-1, 1).to(self.device)
+        x = x.repeat(1, 8)
+        # print(f'{x.shape=}')
+
         for l in range(self.depth):
             self.forward(x)
             if l == embedding_key['l']:
-                self.act_fun[l].update_grid_from_samples_watermark_ver(self.acts[l], embedding_key)
+                update_sample = self.act_fun[l].update_grid_from_samples_watermark_ver(self.acts[l], embedding_key)
             else:
                 self.act_fun[l].update_grid_from_samples(self.acts[l])
-            
+
+        return update_sample
 
     def update_grid_from_samples(self, x):
         '''
@@ -334,16 +353,16 @@ class KAN(nn.Module):
 
             # self.neurons_scale.append(torch.mean(torch.abs(x), dim=0))
             grid_reshape = self.act_fun[l].grid.reshape(self.width[l + 1], self.width[l], -1)
-            input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4
-            output_range = torch.mean(torch.abs(postacts), dim=0)
-            self.acts_scale.append(output_range / input_range) 
-            self.acts_scale_std.append(torch.std(postacts, dim=0))
-            self.spline_preacts.append(preacts.detach())
-            self.spline_postacts.append(postacts.detach())
-            self.spline_postsplines.append(postspline.detach())
+            input_range = grid_reshape[:, :, -1] - grid_reshape[:, :, 0] + 1e-4 # 計算每個最大grid - 最小grid
+            output_range = torch.mean(torch.abs(postacts), dim=0)  # 每個神經元的平均絕對值
+            self.acts_scale.append(output_range / input_range)  # 輸出範圍除以輸入範圍，這個比值可以反映激活函數對輸入數據的放大或壓縮程度。
+            self.acts_scale_std.append(torch.std(postacts, dim=0)) # 計算激活輸出的標準差，這有助於了解輸出數據的分散程度。
+            self.spline_preacts.append(preacts.detach()) # 前激活
+            self.spline_postacts.append(postacts.detach()) # 後激活
+            self.spline_postsplines.append(postspline.detach()) # spline function輸出
 
             x = x + self.biases[l].weight # 加上bias
-            self.acts.append(x)
+            self.acts.append(x) # 將output加到激活列表中
 
         return x
 
@@ -526,7 +545,7 @@ class KAN(nn.Module):
         '''
         self.act_fun[l].unlock(ids)
 
-    def get_range(self, l, i, j, verbose=True):
+    def get_range(self, l, i, j, verbose=False):
         '''
         Get the input range and output range of the (l,i,j) activation
         
@@ -772,8 +791,8 @@ class KAN(nn.Module):
         if title != None:
             plt.gcf().get_axes()[0].text(0.5, y0 * (len(self.width) - 1) + 0.2, title, fontsize=40 * scale, horizontalalignment='center', verticalalignment='center')
 
-    def plot_specific_spline(self, l, i, j, step=0, scale=0.5, tick=False, sample=False):
-        folder = f'neuron_{l}_{i}_{j}'
+    def plot_specific_spline(self, l, i, j, step=0, scale=0.5, tick=False, sample=False, update_sample = None):
+        folder = f'train_process/neuron_{l}_{i}_{j}'
         if not os.path.exists(folder):
             os.makedirs(folder)
         # matplotlib.use('Agg')
@@ -783,6 +802,7 @@ class KAN(nn.Module):
 
         num = rank.shape[0]
 
+        alpha_mask = 1
         symbol_mask = self.symbolic_fun[l].mask[j][i]
         numerical_mask = self.act_fun[l].mask.reshape(self.width[l + 1], self.width[l])[j][i]
         if symbol_mask > 0. and numerical_mask > 0.: # 數值和符號都激活
@@ -817,6 +837,7 @@ class KAN(nn.Module):
         plt.plot(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, lw=5)
         # self.act：input activation(x軸)、self.spline_postacts: output activation(y軸)
         if sample == True:
+            # 這在畫啥？
             plt.scatter(self.acts[l][:, i][rank].cpu().detach().numpy(), self.spline_postacts[l][:, j, i][rank].cpu().detach().numpy(), color=color, s=400 * scale ** 2)
         plt.gca().spines[:].set_color(color)
 
@@ -827,6 +848,15 @@ class KAN(nn.Module):
             plt.text(500, 400, lock_id, fontsize=15)
             newax.imshow(im)
             newax.axis('off')
+
+        # 將sample也放到圖中
+        if update_sample != None:
+            # id = i * self.width[l + 1] + j
+            id = j * self.width[l] + i # self.width[l] = 8 # method 1, 這個id是啥？
+
+            # id = i * self.width[l + 1] + j # method 2
+            # print(f"{l}_{i}_{j}, {self.width[l]=}, {id=}")
+            plt.scatter(update_sample[0][id], update_sample[1][id], color='blue', s=20 * scale ** 2)
 
         plt.savefig(f'{folder}/step_{step}.png', bbox_inches="tight", dpi=400) # l：從l傳到l+1, i：l層的第i個神經元, j：l+1層的第j個神經元
         plt.close()
@@ -990,20 +1020,28 @@ class KAN(nn.Module):
             train_id = np.random.choice(dataset['train_input'].shape[0], batch_size, replace=False)
             test_id = np.random.choice(dataset['test_input'].shape[0], batch_size_test, replace=False)
 
-            if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
-                # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
-                self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
-                embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
+            # if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
+            #     # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
+            #     self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
+            #     embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
                 # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
-            # embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 3, 'phase': 0.0 , 'frequency': 1.0}
-            # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            
+            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.cos, 'j': 0, 'amplitude': 3, 'phase': 0.0 , 'frequency': 20.0}
+            # update_sample = self.embedding_specific_key(embedding_key, dataset) -> 了解x_min, x_max, 看起來沒有mapping到整個function
+            update_sample = self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            
+
+            # plot放這的話不會有問題，因為act還沒被更新
+            for i in range(self.width[0]):
+                for j in range(self.width[1]):
+                    self.plot_specific_spline(0, i, j, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
 
 
             if opt == "LBFGS":
                 optimizer.step(closure)
 
             if opt == "Adam":
-                pred = self.forward(dataset['train_input'][train_id].to(device))
+                pred = self.forward(dataset['train_input'][train_id].to(device)) # 這會把舊的值洗掉
                 if sglr_avoid == True:
                     id_ = torch.where(torch.isnan(torch.sum(pred, dim=1)) == False)[0]
                     train_loss = loss_fn(pred[id_], dataset['train_label'][train_id][id_].to(device))
@@ -1014,6 +1052,7 @@ class KAN(nn.Module):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+            # 經過上面運算，act已經被更新了，plot放下面的話會造成不一致(藍黑點不一樣)
 
             test_loss = loss_fn_eval(self.forward(dataset['test_input'][test_id].to(device)), dataset['test_label'][test_id].to(device))
 
@@ -1043,9 +1082,15 @@ class KAN(nn.Module):
             # TODO: 3個model跑6張gif
 
             # layer 0
-            self.plot_specific_spline(0, 0, 0, step=_, scale=0.5, tick=False, sample=False)
-            self.plot_specific_spline(0, 1, 1, step=_, scale=0.5, tick=False, sample=False)
-            self.plot_specific_spline(0, 6 ,2, step=_, scale=0.5, tick=False, sample=False)
+
+            # for i in range(self.width[0]):
+            #     for j in range(self.width[1]):
+            #         self.plot_specific_spline(0, i, j, step=_, scale=0.5, tick=False, sample=False)
+
+
+            # self.plot_specific_spline(0, 0, 0, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
+            # self.plot_specific_spline(0, 1, 1, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
+            # self.plot_specific_spline(0, 6 ,2, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
 
             # layer 1
             self.plot_specific_spline(1, 0, 0, step=_, scale=0.5, tick=False, sample=False)
