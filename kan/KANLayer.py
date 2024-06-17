@@ -171,7 +171,6 @@ class KANLayer(nn.Module):
         batch = x.shape[0]
         # x: shape (batch, in_dim) => shape (size, batch) (size = out_dim * in_dim)
         # 16512, 8 -> 24, 16512
-        # print(f"({batch=}, {self.in_dim=}) -> ({self.size}, {batch})")
         x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, device=self.device)).reshape(batch, self.size).permute(1, 0)
         preacts = x.permute(1, 0).clone().reshape(batch, self.out_dim, self.in_dim) # 預留激活值，用於可視化(x軸)
         base = self.base_fun(x).permute(1, 0)  # torch.nn.SiLU(), shape (batch, size)
@@ -229,13 +228,13 @@ class KANLayer(nn.Module):
 
         # 自适应和均匀网格更新
         num_intervals = self.grid.shape[1] - 1
-        ids = [int(batch / num_intervals * i) for i in range(num_intervals)] + [-1]
-        grid_adaptive = x_pos[:, ids]
+        ids = [int(batch / num_intervals * i) for i in range(num_intervals)] + [-1] # 基本上將 batch 均勻劃分為 num_intervals 部分，並計算每一部分的起始index。
+        grid_adaptive = x_pos[:, ids] # 是從 x_pos 根據 ids 索引取出的值。這個操作基本上是從 x_pos 中選取特定的點
         margin = 0.01
         grid_uniform = torch.cat([
             grid_adaptive[:, [0]] - margin + (grid_adaptive[:, [-1]] - grid_adaptive[:, [0]] + 2 * margin) * a 
             for a in torch.linspace(0, 1, steps=self.grid.shape[1], device=self.device)
-        ], dim=1)
+        ], dim=1) # 基於 grid_adaptive 的最小值和最大值之間均勻分布。是一個更均勻分佈的網格
 
         self.grid.data = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
         # 更新系数
@@ -278,6 +277,53 @@ class KANLayer(nn.Module):
         self.grid.data = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
         # grid_uniform：整個定義域的均勻分布；grid_adaptive：根據input的實際分佈生成的grid
         self.coef.data = curve2coef(x_pos, y_eval, self.grid, self.k, device=self.device) # (size, grid size + degree k), 不同spline basis function對應參數
+
+    def watermark_verification(self, i, j, key_coef, key_grid, x):
+        '''
+        watermark verification
+        
+        Args:
+        -----
+            i : int
+                input index
+            j : int
+                output index
+            key_coef : 2D torch.float
+                key coefficients
+            key_grid : 2D torch.float
+                key grid
+            x : 2D torch.float
+                inputs, shape (number of samples, input dimension)
+            
+        Returns:
+        --------
+            None
+        
+        Example
+        -------
+        >>> model = KANLayer(in_dim=1, out_dim=1, num=5, k=3)
+        >>> x = torch.linspace(-3,3,steps=100)[:,None]
+        >>> model.update_grid_from_samples(x)
+        >>> key_coef, key_grid = model.save_curve(0, 0)
+        >>> model.watermark_verification(0, 0, key_coef, key_grid, x)
+        '''
+        batch = x.shape[0]
+        x = torch.einsum('ij,k->ikj', x, torch.ones(self.out_dim, ).to(self.device)).reshape(batch, self.size).permute(1, 0)
+        x_pos = torch.sort(x, dim=1)[0]
+        y_eval = coef2curve(x_pos, self.grid, self.coef, self.k, device=self.device)
+        y_eval_key = coef2curve(x_pos, key_grid, key_coef, self.k, device=self.device)
+        id = j * self.in_dim + i 
+        y_eval = y_eval[id]
+        # print(f"\n\nDifference between the original and key sample: {torch.mean((y_eval - y_eval_key) **2).item()}")
+        return torch.mean((y_eval - y_eval_key) **2).item()
+
+    def get_coef_grid(self, i, j):
+        '''
+        save curve
+        '''
+        coef = self.coef[j * self.in_dim + i].cpu().detach().numpy()
+        grid = self.grid[j * self.in_dim + i].cpu().detach().numpy()
+        return coef, grid
 
 
     def initialize_grid_from_parent(self, parent, x):

@@ -267,9 +267,9 @@ class KAN(nn.Module):
         tensor([-1.0000, -0.6000, -0.2000,  0.2000,  0.6000,  1.0000])
         tensor([0.0128, 1.0064, 2.0000, 2.9937, 3.9873, 4.9809])
         '''
+        self.forward(x)
         for l in range(self.depth):
             # 一次更新整層的activation function
-            self.forward(x)
             self.act_fun[l].update_grid_from_samples(self.acts[l])
             # act_fun[l]：第l層的激活函數，acts[l]：第l層的激活值
 
@@ -1021,21 +1021,19 @@ class KAN(nn.Module):
             train_id = np.random.choice(dataset['train_input'].shape[0], batch_size, replace=False)
             test_id = np.random.choice(dataset['test_input'].shape[0], batch_size_test, replace=False)
 
-            # if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
-            #     # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
-            #     self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
-            #     embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 0.5, 'phase': 0.0 , 'frequency': 1.0}
-                # self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            if _ % grid_update_freq == 0 and _ < stop_grid_update_step and update_grid: 
+                # grid_update_freq: 10, stop_grid_update_step: 50, update_grid: True
+                self.update_grid_from_samples(dataset['train_input'][train_id].to(device))
             
-            embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 5, 'phase': 0 , 'frequency': 1}
-            # update_sample = self.embedding_specific_key(embedding_key, dataset) -> 了解x_min, x_max, 看起來沒有mapping到整個function
-            update_sample = self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
+            # embedding_key = {'l': 0, 'i': 0, 'watermark_func': torch.sin, 'j': 0, 'amplitude': 5, 'phase': 0 , 'frequency': 1}
+            # # update_sample = self.embedding_specific_key(embedding_key, dataset) -> 了解x_min, x_max, 看起來沒有mapping到整個function
+            # update_sample = self.update_grid_from_samples_watermark_ver(dataset['train_input'][train_id].to(device), embedding_key)
             
 
             # plot放這的話不會有問題，因為act還沒被更新
-            for i in range(self.width[0]):
-                for j in range(self.width[1]):
-                    self.plot_specific_spline(0, i, j, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
+            # for i in range(self.width[0]):
+            #     for j in range(self.width[1]):
+            #         self.plot_specific_spline(0, i, j, step=_, scale=0.5, tick=False, sample=False, update_sample=update_sample)
 
 
             if opt == "LBFGS":
@@ -1100,6 +1098,65 @@ class KAN(nn.Module):
             
 
         return results
+    
+    def save_curve(self, folder, l, i, j):
+        '''
+        save grid & coef in spefific neuron
+
+        Args:  
+        -----
+            folder : str
+                folder path
+            l : int
+                layer index
+            i : int
+                input neuron index
+            j : int
+                output neuron index
+        ---
+        Returns:
+        --------
+            None
+        '''
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+        
+
+        coef, grid = self.act_fun[l].get_coef_grid(i, j)
+        np.save(f'{folder}/coef_{l}_{i}_{j}.npy', coef)
+        np.save(f'{folder}/grid_{l}_{i}_{j}.npy', grid)
+
+    def watermark_verification(self, key_folder, l, i, j, dataset):
+        '''
+        watermark verification
+
+        Args:
+        -----
+            key_folder : str
+                folder path
+            l : int
+                layer index
+            i : int
+                input neuron index
+            j : int
+                output neuron index
+        ---
+        Returns:
+        --------
+            None
+        '''
+        batch_size = 256
+        train_id = np.random.choice(dataset['train_input'].shape[0], batch_size, replace=False)
+        x = dataset['train_input'][train_id].to(self.device)
+
+        coef = np.load(f'{key_folder}/coef_{l}_{i}_{j}.npy')
+        coef_tensor = torch.from_numpy(coef)
+        coef_tensor = coef_tensor.unsqueeze(0).to(self.device)
+        grid = np.load(f'{key_folder}/grid_{l}_{i}_{j}.npy')
+        grid_tensor = torch.from_numpy(grid)
+        grid_tensor = grid_tensor.unsqueeze(0).to(self.device)
+        compute_mse = self.act_fun[l].watermark_verification(i, j, coef_tensor, grid_tensor, x)
+        return compute_mse
 
     def prune(self, threshold=1e-2, mode="auto", active_neurons_id=None):
         '''
